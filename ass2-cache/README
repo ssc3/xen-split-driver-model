@@ -1,0 +1,13 @@
+1) How to build and run:
+make clean
+make
+./bin/service start
+./bin/client <num_of_threads> <num_of_requests>
+./bin/service stop
+
+
+2) Scripts:
+test2.c : C program to seek to a given sector
+checker.pl: Perl script to perform integrity checking
+rm.sh : Shell script to clean all shared memory 
+

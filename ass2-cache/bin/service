@@ -1,0 +1,20 @@
+#!/bin/bash
+
+ARGTEMP=$1
+S1='start';
+S2='stop';
+
+
+if [ $ARGTEMP = $S1 ]
+then
+  echo "Starting Service";
+  ./bin/server &
+fi
+
+if [ $ARGTEMP = $S2 ]
+then
+  echo "Killing Service";
+  killall -9 server
+  killall -9 client	
+fi
+

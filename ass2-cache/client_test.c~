@@ -1,0 +1,234 @@
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <time.h>
+#include "data.h" 
+#include "pthread.h"
+
+pthread_mutex_t mutex1;
+pthread_mutex_t mutex2;
+static int thread_count = 0;
+static int requests_per_thread = 0;
+static int remainder_threads = 0;
+static int num_of_threads = 0;
+static int num_of_requests = 0;
+static int global_thread_requests = 0;
+
+
+typedef struct stats_holder {
+	long running_time[100000];
+} stats_t;
+
+stats_t stats;
+	
+
+void *spawnthread(void* t)
+{
+	device_ring* temp;
+	temp = (device_ring*) t;
+	unsigned char* buf;
+	
+	
+  	int i;
+	int curr_tid;
+	int curr_thread_requests = 0;
+
+
+	pthread_mutex_lock(&mutex1);
+	thread_count++;
+	curr_tid = thread_count;
+	if(curr_tid == 1)
+	{	
+		curr_thread_requests = requests_per_thread + remainder_threads;
+		printf("No. of requests in TID %d = %d\n", curr_tid, requests_per_thread + remainder_threads);
+	}
+
+	else
+	{
+		curr_thread_requests = requests_per_thread;
+		printf("No. of requests in TID %d = %d\n\n", curr_tid, requests_per_thread);
+	}
+
+
+	pthread_mutex_unlock(&mutex1);
+
+
+	while (curr_thread_requests != 0)
+	{
+	pthread_mutex_lock(&mutex2);
+	
+	for(i = 1; i<NUM_SLOTS; i++)
+	{
+		if (temp->slot[i].full == 0)
+		{
+
+			global_thread_requests++;
+			temp->slot[i].slot_id = i;
+			temp->slot[i].data_ready = 0;
+			temp->slot[i].tid = curr_tid;
+			temp->slot[i].global_req_id = global_thread_requests;
+			temp->slot[i].sector_number = rand() % temp->num_of_sectors;
+			
+	      		//printf("Slotted req_id = %d, tid = %d in slot %d\n\n", temp->slot[i].global_req_id, i, temp->slot[i].tid);	  
+			curr_thread_requests--;
+		
+			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &(temp->slot[i].start_time));
+			temp->slot[i].full = 1;
+
+			break;
+		}	
+
+
+		if (i == NUM_SLOTS - 1)
+		i = 1;
+
+	}	
+		pthread_mutex_unlock(&mutex2);	
+
+		while(temp->slot[i].data_ready == 0)
+		{
+			//sleep(1);
+		}
+
+		FILE* fp;
+		char filename[12];
+
+	/*Writing sector numbers into text file*/
+		sprintf(filename, "sectors.%d.txt", getpid());
+
+       		if(!(fp = fopen(filename,"a")))
+		{
+			printf("Unable to open file \n");
+			exit(EXIT_FAILURE);
+       		}
+		//fwrite(&temp->slot[i].sector_number, 8, 1, fp);
+		fprintf(fp, "%d\n", temp->slot[i].sector_number); 
+		fclose(fp);
+
+	/*Writing sector numbers in binary format*/
+		sprintf(filename, "sectors.%d", getpid());
+
+       		if(!(fp = fopen(filename,"a")))
+		{
+			printf("Unable to open file \n");
+			exit(EXIT_FAILURE);
+       		}
+		fwrite(&temp->slot[i].sector_number, 8, 1, fp);
+		//fprintf(fp, "%d", temp->slot[i].sector_number); 
+		fclose(fp);
+
+	/*Writing into read file*/
+		sprintf(filename, "read.%d", getpid());
+
+       		if(!(fp = fopen(filename,"a")))
+		{
+			printf("Unable to open file \n");
+			exit(EXIT_FAILURE);
+       		}
+		fwrite(temp->slot[i].data, 1, 512, fp);
+		//sleep(1);
+      		printf("Done req_id = %d, tid = %d in slot %d\n\n", temp->slot[i].global_req_id, temp->slot[i].tid, i);
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &(temp->slot[i].end_time));
+		stats.running_time[temp->slot[i].global_req_id] = (temp->slot[i].end_time.tv_nsec - temp->slot[i].start_time.tv_nsec) + (temp->slot[i].end_time.tv_sec - temp->slot[i].start_time.tv_sec)*1000000000;
+
+		printf("Running_time = %ld\n", stats.running_time[temp->slot[i].global_req_id]);
+		temp->slot[i].full = 0;
+		fclose(fp);	
+	}
+		pthread_exit(NULL);
+}
+
+
+int main(int argc, char* argv[])
+{
+	int shmid;
+	key_t key;
+	srand(time(NULL));
+	key = rand()%1000;
+
+	device_ring *t;
+	device_ring *shm;
+
+	pthread_t threads[1000];
+	pthread_attr_t attr;
+	void* status;
+
+	int rc;
+	int t_num;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+
+	FILE* fptemp;
+	fptemp = fopen ("client_list.txt", "a");
+	fprintf(fptemp, "%d", key); 
+	fclose (fptemp);
+	//sleep(2);
+
+
+	if ((shmid = shmget(key, sizeof(device_ring), IPC_CREAT | 0666)) < 0) 
+	{
+    		perror("shmget");
+    		return 1;
+  	}  
+
+  	if ((shm = shmat(shmid, NULL, 0)) == (device_ring *) -1) 
+	{
+    		perror("shmat");
+    		return 1;
+  	}
+
+	t = (device_ring*) shm;	
+	
+	int child,i;
+
+	num_of_threads=atoi(argv[1]);
+	printf("Number of threads = %d\n", num_of_threads);
+	num_of_requests=atoi(argv[2]);
+	printf("Number of requests = %d\n", num_of_requests);
+
+	requests_per_thread = (int) num_of_requests/num_of_threads;
+	remainder_threads = (int) num_of_requests%num_of_threads;
+	
+	while(t->num_of_sectors_ready != 1)
+	{ //Loop here until the number of sectors is available
+	}
+
+
+	for (t_num = 0; t_num < num_of_threads; t_num++)
+	{
+	 	printf("Spawning thread tid = %d\n", t_num);
+         	rc = pthread_create(&threads[t_num], &attr, spawnthread, (void*) t);
+         	if (rc)
+		{
+             		printf("ERROR; return code from pthread_create() is %d\n", rc);
+             		exit(-1);
+         	}
+
+        }     
+
+
+   /* Free attribute and wait for the other threads */
+	pthread_attr_destroy(&attr);
+   	for(t_num=0; t_num<num_of_threads; t_num++) 
+	{
+      		rc = pthread_join(threads[t_num], &status);
+      		if (rc)
+		{
+        		printf("ERROR; return code from pthread_join() is %d\n", rc);
+         		exit(-1);
+        	}
+      		printf("Main: completed join with thread %d having a status of %ld\n",t_num,(long)status);
+      	}
+	
+	if(shmdt(shm) != 0)
+    	fprintf(stderr, "Could not close memory segment.\n");
+	
+  	print_final_stats();
+  	pthread_exit(NULL);
+	return 0;
+}
